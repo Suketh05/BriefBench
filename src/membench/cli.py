@@ -15,7 +15,14 @@ import typer
 from membench.analysis.report import generate_report
 from membench.analysis.tables import ablation_table, depth_crossover_table, headline_table
 from membench.competitors import load_vendor_claims
-from membench.harness import DEFAULT_ARMS, load_rows, run_benchmark, run_sweep, save_rows
+from membench.harness import (
+    DEFAULT_ARMS,
+    load_rows,
+    run_benchmark,
+    run_from_config,
+    run_sweep,
+    save_rows,
+)
 from membench.theory.crossover import find_crossover_depth, overhead_ratio
 from membench.theory.decay import SimilarityDecayModel
 from membench.theory.recovery import RecoveryModel
@@ -81,6 +88,27 @@ def sweep(
     typer.echo("four-arm ablation (dcbench+swebench, compliance):")
     for condition, value in sorted(ablation_table(rows).items()):
         typer.echo(f"  {condition:<18} {value:.2f}")
+
+
+@app.command(name="sweep-config")
+def sweep_config(
+    config: Path = Path("configs/default.yaml"),
+    out_dir: Path = Path("results"),
+    created_at: str | None = None,
+) -> None:
+    """Run a config-driven sweep (per-dataset budget) and write rows + a run manifest."""
+    import json
+
+    from membench.config.schema import load_config
+
+    cfg = load_config(config)
+    result = run_from_config(cfg, created_at=created_at)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_rows(result.rows, out_dir / "rows.jsonl")
+    (out_dir / "manifest.json").write_text(json.dumps(result.manifest.to_dict(), indent=2))
+    typer.echo(f"swept {len(result.rows)} scored rows over {cfg.datasets} -> {out_dir}/")
+    for arm, reason in sorted(result.skipped.items()):
+        typer.echo(f"  skipped {arm}: {reason}")
 
 
 @app.command()
