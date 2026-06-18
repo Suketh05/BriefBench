@@ -48,7 +48,9 @@ jobs:
 
   cuda-kernel:
     name: CUDA kernel (compile-only)
-    runs-on: ubuntu-latest
+    # ubuntu-24.04 (current ubuntu-latest) has no apt candidate for cuda-nvcc-12-4;
+    # the CUDA 12.4 network repo resolves on 22.04. Pin the runner to keep nvcc installable.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.18
