@@ -87,3 +87,12 @@ jobs:
         run: |
           npm ci
           npm run typecheck
+
+  sql-schema:
+    name: SQL graph schema (sqlite validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Validate the schema parses and the traversal CTE runs
+        run: sqlite3 ":memory:" < schema/graph.sql
