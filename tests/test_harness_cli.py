@@ -56,3 +56,22 @@ class TestCLI:
         )
         assert fig_res.exit_code == 0
         assert (tmp_path / "figs" / "depth_crossover.png").exists()
+
+    def test_sweep_then_report_renders_all_four_ablation_rows(self, tmp_path: Path) -> None:
+        # The real bug this guards: tables hand-built rows and never ran the CLI
+        # sweep->report path, so the headline ablation silently dropped its Brief and
+        # random rows on a real run. Drive the actual path and assert all four render.
+        rows_path = tmp_path / "rows.jsonl"
+        sweep_res = runner.invoke(app, ["sweep", "--per-depth", "3", "--out", str(rows_path)])
+        assert sweep_res.exit_code == 0 and rows_path.exists()
+
+        rows = load_rows(rows_path)
+        # the budget-matched control runs on the ablation datasets, not synthetic
+        assert any(r.arm == "random_context" and r.dataset in ("dcbench", "swebench") for r in rows)
+
+        report_path = tmp_path / "report.md"
+        rep_res = runner.invoke(app, ["report", "--src", str(rows_path), "--out", str(report_path)])
+        assert rep_res.exit_code == 0
+        md = report_path.read_text()
+        for condition in ("full_spec/none", "stripped/none", "stripped/brief", "stripped/random"):
+            assert condition in md, f"ablation row {condition!r} missing from report"

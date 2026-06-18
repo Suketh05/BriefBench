@@ -94,7 +94,19 @@ def generate_report(
 
     parts += ["", "## Depth crossover (full-chain recovery)", "", crossover_md, ""]
 
-    parts += ["## Four-arm ablation", "", "| condition | compliance |", "|---|---|"]
+    parts += [
+        "## Four-arm ablation",
+        "",
+        "_Ecological ablation on the real spec-stripped coding datasets (dcbench + "
+        "swebench). Structured recovery here is partial -- above the stripped/none and "
+        "budget-matched random floors, but short of the full-spec ceiling -- and is "
+        "reported exactly as measured. The flat, near-total separation in the "
+        "depth-crossover table above is the *controlled* synthetic chain test, a "
+        "different measurement; the two are not interchangeable._",
+        "",
+        "| condition | compliance |",
+        "|---|---|",
+    ]
     for condition, value in sorted(ablation_table(rows).items()):
         parts.append(f"| {condition} | {_fmt(value)} |")
 

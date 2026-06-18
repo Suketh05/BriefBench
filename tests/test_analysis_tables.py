@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from membench.agents.runner import AttemptRecord
 from membench.analysis.tables import (
+    ScoredRow,
     ablation_table,
     competitor_matrix,
     depth_crossover_table,
@@ -85,10 +86,40 @@ class TestTables:
             assert table[("none", d)] == 0.0
 
     def test_ablation_cells(self) -> None:
-        rows = score_records(*_dataset())
+        # The ecological ablation lives on dcbench/swebench with the 3-hop graph arm.
+        def row(dataset: str, arm: str, depth: int, rate: float) -> ScoredRow:
+            variant = "full" if depth == 1 else "stripped"
+            return ScoredRow(
+                dataset,
+                arm,
+                "claude-sonnet-4-6",
+                depth,
+                variant,
+                rate,
+                rate == 1.0,
+                rate,
+                rate,
+                rate == 1.0,
+                120,
+                0.0,
+            )
+
+        rows = [
+            row("dcbench", "none", 1, 1.0),
+            row("dcbench", "none", 3, 0.0),
+            row("dcbench", "brief_graph_3hop", 3, 0.6),
+            row("dcbench", "random_context", 3, 0.1),
+            # A synthetic row at the same (arm, depth) must NOT leak into the ablation.
+            row("synthetic", "brief_graph_3hop", 3, 1.0),
+        ]
         table = ablation_table(rows)
-        assert table["stripped/brief"] == 1.0
+        expected = {"full_spec/none", "stripped/none", "stripped/brief", "stripped/random"}
+        assert set(table) == expected
+        assert table["full_spec/none"] == 1.0
         assert table["stripped/none"] == 0.0
+        # The dcbench value, not the synthetic 1.0 -- synthetic is excluded by design.
+        assert table["stripped/brief"] == 0.6
+        assert table["stripped/random"] == 0.1
 
 
 class TestCompetitorMatrix:

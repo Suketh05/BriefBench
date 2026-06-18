@@ -13,9 +13,9 @@ from pathlib import Path
 import typer
 
 from membench.analysis.report import generate_report
-from membench.analysis.tables import depth_crossover_table, headline_table
+from membench.analysis.tables import ablation_table, depth_crossover_table, headline_table
 from membench.competitors import load_vendor_claims
-from membench.harness import DEFAULT_ARMS, load_rows, run_benchmark, save_rows
+from membench.harness import DEFAULT_ARMS, load_rows, run_benchmark, run_sweep, save_rows
 from membench.theory.crossover import find_crossover_depth, overhead_ratio
 from membench.theory.decay import SimilarityDecayModel
 from membench.theory.recovery import RecoveryModel
@@ -65,6 +65,22 @@ def run(
     for arm in arms:
         cells = " ".join(f"d{d}={crossover.get((arm, d), float('nan')):.2f}" for d in depths)
         typer.echo(f"  {arm:<18} {cells}")
+
+
+@app.command()
+def sweep(
+    budget: int = 150,
+    per_depth: int = 10,
+    seed: int = 0,
+    out: Path = _DEFAULT_RESULTS,
+) -> None:
+    """Run the full sweep (headline arms + the dcbench/swebench ablation) to JSONL."""
+    rows = run_sweep(budget=budget, per_depth=per_depth, seed=seed)
+    save_rows(rows, out)
+    typer.echo(f"swept {len(rows)} scored rows -> {out}")
+    typer.echo("four-arm ablation (dcbench+swebench, compliance):")
+    for condition, value in sorted(ablation_table(rows).items()):
+        typer.echo(f"  {condition:<18} {value:.2f}")
 
 
 @app.command()

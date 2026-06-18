@@ -32,6 +32,8 @@ from membench.types import Task
 _K = TypeVar("_K")
 
 __all__ = [
+    "ABLATION_CELLS",
+    "ABLATION_DATASETS",
     "ScoredRow",
     "TwoTierMatrix",
     "ablation_table",
@@ -44,6 +46,19 @@ __all__ = [
 
 _CLAUDE_PREFIX = "claude"
 _STRIPPABLE = ("dcbench", "swebench", "synthetic")
+# The four-arm ablation is an *ecological* test on the real spec-stripped coding
+# datasets only -- never synthetic. Synthetic is the controlled depth-crossover test;
+# blending its flat, near-total separation into the ablation would overstate recovery.
+ABLATION_DATASETS = ("dcbench", "swebench")
+# The ablation's structured arm is brief_graph_3hop: plain brief_graph is 2-hop and
+# cannot reach a depth-3 chain, so an ("brief_graph", 3) cell would render Brief as
+# failing to recover -- a latent bug, not a measurement.
+ABLATION_CELLS: dict[tuple[str, int], str] = {
+    ("none", 1): "full_spec/none",
+    ("none", 3): "stripped/none",
+    ("brief_graph_3hop", 3): "stripped/brief",
+    ("random_context", 3): "stripped/random",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +135,7 @@ def depth_crossover_table(rows: Sequence[ScoredRow]) -> dict[tuple[str, int], fl
 
 
 def robustness_table(
-    rows: Sequence[ScoredRow], graph_arm: str = "brief_graph"
+    rows: Sequence[ScoredRow], graph_arm: str = "brief_graph_3hop"
 ) -> dict[tuple[str, str], float]:
     """Mean compliance per (dataset, model) with the memory arm fixed to the graph arm."""
     return _grouped_mean(
@@ -132,16 +147,15 @@ def ablation_table(
     rows: Sequence[ScoredRow],
     cells: Mapping[tuple[str, int], str] | None = None,
 ) -> dict[str, float]:
-    """Relabel specific (arm, depth) cells into the four-arm ablation."""
-    cells = cells or {
-        ("none", 1): "full_spec/none",
-        ("none", 3): "stripped/none",
-        ("brief_graph", 3): "stripped/brief",
-        ("random_context", 3): "stripped/random",
-    }
+    """Relabel specific (arm, depth) cells into the four-arm ablation.
+
+    Restricted to the ecological datasets (dcbench + swebench); synthetic is excluded
+    so the controlled-crossover separation is never conflated with measured recovery.
+    """
+    cells = cells or ABLATION_CELLS
     grouped: dict[str, list[float]] = {}
     for r in rows:
-        if r.dataset not in _STRIPPABLE or not r.model.startswith(_CLAUDE_PREFIX):
+        if r.dataset not in ABLATION_DATASETS or not r.model.startswith(_CLAUDE_PREFIX):
             continue
         label = cells.get((r.arm, r.depth))
         if label is not None:
