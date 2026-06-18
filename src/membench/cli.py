@@ -15,7 +15,9 @@ import typer
 from membench.analysis.report import generate_report
 from membench.analysis.tables import depth_crossover_table, headline_table
 from membench.competitors import load_vendor_claims
-from membench.harness import DEFAULT_ARMS, load_rows, run_benchmark, save_rows
+from membench.config.schema import load_config
+from membench.harness import DEFAULT_ARMS, load_rows, run_benchmark, run_from_config, save_rows
+from membench.manifest import save_manifest
 from membench.theory.crossover import find_crossover_depth, overhead_ratio
 from membench.theory.decay import SimilarityDecayModel
 from membench.theory.recovery import RecoveryModel
@@ -65,6 +67,32 @@ def run(
     for arm in arms:
         cells = " ".join(f"d{d}={crossover.get((arm, d), float('nan')):.2f}" for d in depths)
         typer.echo(f"  {arm:<18} {cells}")
+
+
+@app.command()
+def sweep(
+    config: Path = Path("configs/default.yaml"),
+    out_dir: Path = Path("results"),
+    created_at: str = "",
+) -> None:
+    """Run a full config-driven sweep (datasets x arms x models) + write a manifest.
+
+    Loads a validated config (the fairness lock is enforced there), runs every dataset
+    at its per-dataset budget, and writes the scored rows and the reproducibility
+    manifest. Arms unavailable in this environment (e.g. uninstalled competitors) are
+    skipped and reported, not fatal.
+    """
+    cfg = load_config(config)
+    result = run_from_config(cfg, created_at=created_at or None)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_rows(result.rows, out_dir / "rows.jsonl")
+    save_manifest(result.manifest, out_dir / "manifest.json")
+    typer.echo(f"swept {len(result.rows)} rows over {cfg.datasets} -> {out_dir}/")
+    typer.echo(f"device: {result.manifest.device.kind} ({result.manifest.device.name})")
+    if result.skipped:
+        typer.echo("skipped arms (unavailable in this environment):")
+        for arm, reason in result.skipped.items():
+            typer.echo(f"  {arm}: {reason[:80]}")
 
 
 @app.command()

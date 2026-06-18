@@ -68,3 +68,31 @@ class TestExtractMatches:
 
     def test_empty(self) -> None:
         assert _extract_matches(_Result()) == []
+
+    def test_real_brief_search_shape(self) -> None:
+        # The shape the live brief_search MCP tool actually returns: a top-level
+        # `results` array of records carrying id / title / snippet (verified against
+        # the live workspace). The arm keys retrieval on `id` and uses snippet/title.
+        real = _Result(
+            structured={
+                "query": "audit logging",
+                "results": [
+                    {
+                        "id": "dec-001",
+                        "title": "Audit logging on exports",
+                        "snippet": "must call withAuditLog",
+                        "type": "decision",
+                    },
+                    {
+                        "id": "dec-002",
+                        "title": "DateRangePicker standard",
+                        "snippet": "use DateRangePicker",
+                        "type": "decision",
+                    },
+                ],
+                "totalCount": 2,
+            }
+        )
+        matches = _extract_matches(real)
+        assert [m["id"] for m in matches] == ["dec-001", "dec-002"]
+        assert matches[0]["snippet"].startswith("must call")
