@@ -1,0 +1,18 @@
+{
+  "claude": {
+    "model_id": "claude-sonnet-4-6",
+    "backend": "anthropic",
+    "implemented": true
+  },
+  "gpt": {
+    "model_id": "gpt-5.1",
+    "backend": "openai",
+    "implemented": false
+  },
+  "open_weight": {
+    "model_id": "llama-4-maverick",
+    "backend": "together_ai",
+    "implemented": false
+  },
+  "_note": "Model-robustness row pins (PLAN.md's open question, resolved by user decision: GPT-5.1 + Llama 4 Maverick via a hosted inference API). Only 'claude' has a working agent/llm_client.py backend (AnthropicLLMClient). gpt and open_weight are recorded here so the config grid is complete and reproducible, but run.py skips any cell whose model has implemented:false with an explicit notice rather than guessing at an OpenAI or Together AI client implementation -- building those backends is separate scope from wiring the fairness lock."
+}

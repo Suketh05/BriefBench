@@ -1,0 +1,11 @@
+{
+  "_description": "Depth-crossover sweep: model held fixed at claude (CLAUDE.md's model-fixed line, not a third dimension), all five arms, dcbench + swebench only (the two spec-strippable datasets), depths 1/2/3. The depth=1 cells here are the identical (dataset, arm=*, model=claude, full, 1) cells as headline_robustness.json's memory_line for dcbench/swebench -- configs/loader.py de-duplicates so they only run once.",
+  "model": "claude",
+  "datasets": ["dcbench", "swebench"],
+  "arms": ["none", "fullcontext", "mem0", "brief", "random_context"],
+  "spec_variants_by_depth": {
+    "1": "full",
+    "2": "stripped",
+    "3": "stripped"
+  }
+}

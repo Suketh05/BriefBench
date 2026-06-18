@@ -1,0 +1,10 @@
+{
+  "budget_tokens_by_dataset": {
+    "dcbench": 250,
+    "swebench": 500,
+    "longmemeval": 8000
+  },
+  "code_search_tool": "none",
+  "retry_policy": "single_shot",
+  "_note": "Fairness lock (CLAUDE.md): every cell in every config file below inherits these values -- same budget per dataset across every arm and every model, same code_search_tool, same retry_policy. budget_tokens_by_dataset is per-dataset rather than one global number because corpus scale differs by orders of magnitude (dcbench's full corpus is ~1.2K tokens; a swebench repo pool is ~0.9-2K tokens; a longmemeval question's haystack is ~33K tokens) -- one shared number would be trivially full for some datasets and trivially empty for others, which would confound the comparison rather than control it. The invariant CLAUDE.md actually needs -- same budget across arms, for a given dataset -- is preserved exactly. Values were calibrated against the measured sizes of the vendored data in benchmarks/data/*, not picked arbitrarily; see the conversation that produced them for the per-dataset token counts."
+}

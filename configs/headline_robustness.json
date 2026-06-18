@@ -1,0 +1,16 @@
+{
+  "_description": "CLAUDE.md's two-line grid, swept as two lines rather than the full arm x model cube: the memory line holds model fixed and sweeps arm (-> headline table); the model line holds arm fixed at brief and sweeps model (-> model-robustness table). Both lines run at the native/unstripped condition: full-spec (depth=1) for dcbench/swebench, and longmemeval's own task-level depth, which is read off its structure and not config-dialed.",
+  "datasets": ["dcbench", "swebench", "longmemeval"],
+  "memory_line": {
+    "model": "claude",
+    "arms": ["none", "fullcontext", "mem0", "brief", "random_context"]
+  },
+  "model_line": {
+    "arm": "brief",
+    "models": ["claude", "gpt", "open_weight"]
+  },
+  "condition": {
+    "dcbench_swebench_spec_variant": "full",
+    "dcbench_swebench_depth": 1
+  }
+}

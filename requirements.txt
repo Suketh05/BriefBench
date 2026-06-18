@@ -1,0 +1,12 @@
+# membench dependencies
+# Python >= 3.10 required (mcp package needs 3.10+ for the brief arm)
+
+# Anthropic API — main model client
+anthropic>=0.40.0
+
+# MCP client — brief arm only (adapters/brief.py)
+# Requires Python >= 3.10
+mcp>=1.0.0
+
+# Test runner
+pytest>=7.0.0
