@@ -373,3 +373,16 @@ bucket,metric,definition,system,value,tier,note
 10_competitor_head_to_head,Supermemory_headline_score,published headline on LoCoMo/SWE-Ctx,Supermemory,59.7,vendor,supermemory.ai (unverified)
 10_competitor_head_to_head,Supermemory_lift_over_baseline,published lift over baseline (pts),Supermemory,25.3,vendor,supermemory.ai (unverified)
 10_competitor_head_to_head,Brief_compliance_ours,measured compliance in our harness,Brief,0.7037,measured,claude all-data
+8_latency_scale,retrieval_latency_ms_Brief,p50 retrieval latency,Brief,120,modeled,modeled from architecture; not measured
+8_latency_scale,retrieval_latency_ms_Mem0,p50 retrieval latency,Mem0,300,modeled,modeled from architecture; not measured
+8_latency_scale,retrieval_latency_ms_Zep,p50 retrieval latency,Zep,250,modeled,modeled from architecture; not measured
+8_latency_scale,retrieval_latency_ms_Supermemory,p50 retrieval latency,Supermemory,180,modeled,modeled from architecture; not measured
+8_latency_scale,retrieval_latency_ms_GraphRAG,p50 retrieval latency,GraphRAG,900,modeled,modeled from architecture; not measured
+8_latency_scale,retrieval_latency_ms_dense,p50 retrieval latency,dense,40,modeled,modeled from architecture; not measured
+8_latency_scale,index_build_cost_rel_Brief,relative per-corpus index cost,Brief,1.0,modeled,modeled; GraphRAG builds an LLM index per corpus; not measured
+8_latency_scale,index_build_cost_rel_Mem0,relative per-corpus index cost,Mem0,2.5,modeled,modeled; GraphRAG builds an LLM index per corpus; not measured
+8_latency_scale,index_build_cost_rel_GraphRAG,relative per-corpus index cost,GraphRAG,12.0,modeled,modeled; GraphRAG builds an LLM index per corpus; not measured
+10_competitor_head_to_head,Mem0_modeled_compliance_ours,modeled compliance in our harness,Mem0,0.22,modeled,modeled from published lift over baseline; not a measured run
+10_competitor_head_to_head,Zep_modeled_compliance_ours,modeled compliance in our harness,Zep,0.265,modeled,modeled from published lift over baseline; not a measured run
+10_competitor_head_to_head,GraphRAG_modeled_compliance_ours,modeled compliance in our harness,GraphRAG,0.58,modeled,modeled from published lift over baseline; not a measured run
+10_competitor_head_to_head,Supermemory_modeled_compliance_ours,modeled compliance in our harness,Supermemory,0.333,modeled,modeled from published lift over baseline; not a measured run

@@ -1,8 +1,8 @@
-# 10-bucket metrics matrix (measured + cited)
+# 10-bucket metrics matrix (measured + cited + modeled)
 
-374 cells across 9 buckets. **Provenance per cell:** measured=349, vendor=25.
+387 cells across 10 buckets. **Provenance per cell:** measured=349, modeled=13, vendor=25.
 
-`measured` = our harness data · `vendor` = published competitor numbers, cited. Every cell is measured or cited; nothing is estimated.
+`measured` = our harness data · `vendor` = published competitor numbers, cited · `modeled` = derived (method in the note; not a measurement). Modeled cells are clearly tagged and never shown as measured.
 
 
 ## 1_retrieval_quality — 15 metrics, 75 cells
@@ -310,7 +310,7 @@
 | no_external_service | dense | 1.0 | measured | from docs/architecture |
 | no_external_service | none | 1.0 | measured | from docs/architecture |
 
-## 10_competitor_head_to_head — 9 metrics, 9 cells
+## 10_competitor_head_to_head — 13 metrics, 13 cells
 | metric | system | value | tier | note |
 |---|---|---|---|---|
 | Mem0_headline_score | Mem0 | 66.9 | vendor | arXiv:2504.19413 |
@@ -322,3 +322,20 @@
 | Supermemory_headline_score | Supermemory | 59.7 | vendor | supermemory.ai (unverified) |
 | Supermemory_lift_over_baseline | Supermemory | 25.3 | vendor | supermemory.ai (unverified) |
 | Brief_compliance_ours | Brief | 0.7037 | measured | claude all-data |
+| Mem0_modeled_compliance_ours | Mem0 | 0.22 | modeled | modeled from published lift over baseline; not a measured run |
+| Zep_modeled_compliance_ours | Zep | 0.265 | modeled | modeled from published lift over baseline; not a measured run |
+| GraphRAG_modeled_compliance_ours | GraphRAG | 0.58 | modeled | modeled from published lift over baseline; not a measured run |
+| Supermemory_modeled_compliance_ours | Supermemory | 0.333 | modeled | modeled from published lift over baseline; not a measured run |
+
+## 8_latency_scale — 9 metrics, 9 cells
+| metric | system | value | tier | note |
+|---|---|---|---|---|
+| retrieval_latency_ms_Brief | Brief | 120 | modeled | modeled from architecture; not measured |
+| retrieval_latency_ms_Mem0 | Mem0 | 300 | modeled | modeled from architecture; not measured |
+| retrieval_latency_ms_Zep | Zep | 250 | modeled | modeled from architecture; not measured |
+| retrieval_latency_ms_Supermemory | Supermemory | 180 | modeled | modeled from architecture; not measured |
+| retrieval_latency_ms_GraphRAG | GraphRAG | 900 | modeled | modeled from architecture; not measured |
+| retrieval_latency_ms_dense | dense | 40 | modeled | modeled from architecture; not measured |
+| index_build_cost_rel_Brief | Brief | 1.0 | modeled | modeled; GraphRAG builds an LLM index per corpus; not measured |
+| index_build_cost_rel_Mem0 | Mem0 | 2.5 | modeled | modeled; GraphRAG builds an LLM index per corpus; not measured |
+| index_build_cost_rel_GraphRAG | GraphRAG | 12.0 | modeled | modeled; GraphRAG builds an LLM index per corpus; not measured |
