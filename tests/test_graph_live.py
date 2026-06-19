@@ -68,3 +68,17 @@ class TestExtractMatches:
 
     def test_empty(self) -> None:
         assert _extract_matches(_Result()) == []
+
+    def test_real_brief_search_response_shape(self) -> None:
+        # The shape the live brief_search MCP returns: a top-level results array of
+        # objects carrying id/title/snippet/type. _extract_matches must read it as-is.
+        payload = {
+            "results": [
+                {"id": "dec-1", "title": "RawSQL allowlist", "snippet": "...", "type": "decision"},
+                {"id": "dec-2", "title": "Audit log wrapper", "snippet": "...", "type": "decision"},
+            ],
+            "total": 2,
+        }
+        matches = _extract_matches(_Result(structured=payload))
+        assert [m["id"] for m in matches] == ["dec-1", "dec-2"]
+        assert matches[0]["title"] == "RawSQL allowlist"
