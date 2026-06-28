@@ -1,13 +1,17 @@
 """The ``membench`` command-line interface.
 
-Five commands cover the workflow: ``theory`` (predict the crossover depth from
+Six commands cover the workflow: ``theory`` (predict the crossover depth from
 parameters), ``run`` (execute a dataset x arms sweep and persist scored rows),
-``tables`` (print the headline tables), ``report`` (write the Markdown report), and
-``figures`` (render the publication figures). Everything runs offline by default.
+``tables`` (print the headline tables), ``report`` (write the Markdown report),
+``figures`` (render the publication figures), and ``frontier`` (print the
+accuracy-cost Pareto frontier and the area-under-depth-curve per arm). Everything
+runs offline by default.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from pathlib import Path
 
 import typer
@@ -141,6 +145,112 @@ def figures(src: Path = _DEFAULT_RESULTS, out_dir: Path = Path("figures")) -> No
         series.setdefault(arm, {})[depth] = value
     path = save_figure(plot_depth_crossover(series), out_dir / "depth_crossover.png")
     typer.echo(f"wrote figure -> {path}")
+
+
+def _mean(values: Sequence[float]) -> float:
+    """Arithmetic mean of ``values`` (0.0 when empty)."""
+    return sum(values) / len(values) if values else 0.0
+
+
+def _pareto_frontier(points: Mapping[str, tuple[float, float]]) -> list[str]:
+    r"""Return the arm names on the accuracy-cost Pareto frontier.
+
+    Each arm maps to a ``(cost, accuracy)`` objective pair where *cost* is to be
+    minimised and *accuracy* maximised. Arm :math:`b` **dominates** arm :math:`a`
+    when it is no worse on both objectives and strictly better on at least one:
+
+    .. math::
+
+        cost_b \\le cost_a \\;\\wedge\\; acc_b \\ge acc_a
+        \\;\\wedge\\; (cost_b < cost_a \\;\\vee\\; acc_b > acc_a).
+
+    The frontier is the set of *non-dominated* (Pareto-efficient) arms -- those for
+    which no other arm dominates them. This is the standard notion of Pareto
+    efficiency in multi-objective optimisation (Deb, K., 2001, *Multi-Objective
+    Optimization Using Evolutionary Algorithms*, Wiley, ch. 2).
+
+    Parameters
+    ----------
+    points : Mapping[str, tuple[float, float]]
+        Arm name -> ``(cost, accuracy)`` objective pair.
+
+    Returns
+    -------
+    list[str]
+        Non-dominated arm names, sorted by ascending cost then descending accuracy.
+    """
+    frontier = [
+        arm
+        for arm, (cost, acc) in points.items()
+        if not any(
+            other != arm and o_cost <= cost and o_acc >= acc and (o_cost < cost or o_acc > acc)
+            for other, (o_cost, o_acc) in points.items()
+        )
+    ]
+    return sorted(frontier, key=lambda arm: (points[arm][0], -points[arm][1]))
+
+
+def _audc(depth_recovery: Mapping[int, float]) -> float:
+    r"""Area under the depth-recovery curve via the composite trapezoidal rule.
+
+    Given per-depth recovery rates :math:`y_d` measured at sorted depths
+    :math:`d_0 < d_1 < \\dots < d_n`, the area is
+
+    .. math::
+
+        \\mathrm{AUDC} = \\sum_{i=0}^{n-1}
+        \\tfrac{1}{2}\\,(y_{d_i} + y_{d_{i+1}})\\,(d_{i+1} - d_i),
+
+    i.e. the composite trapezoidal quadrature of recovery against depth (Atkinson,
+    K. E., 1989, *An Introduction to Numerical Analysis*, 2nd ed., Wiley, §5.1; cf.
+    ``numpy.trapz``). Higher AUDC means an arm sustains chain recovery deeper. With
+    a single observed depth the curve degenerates to a point and its height is
+    returned.
+
+    Parameters
+    ----------
+    depth_recovery : Mapping[int, float]
+        Depth -> mean recovery rate at that depth.
+
+    Returns
+    -------
+    float
+        The trapezoidal area under the recovery-vs-depth curve.
+    """
+    depths = sorted(depth_recovery)
+    if len(depths) == 1:
+        return depth_recovery[depths[0]]
+    area = 0.0
+    for left, right in pairwise(depths):
+        area += 0.5 * (depth_recovery[left] + depth_recovery[right]) * (right - left)
+    return area
+
+
+@app.command()
+def frontier(src: Path = _DEFAULT_RESULTS) -> None:
+    """Print the accuracy-cost Pareto frontier and the AUDC per arm."""
+    rows = load_rows(src)
+    correct_by_arm: dict[str, list[float]] = {}
+    cost_by_arm: dict[str, list[float]] = {}
+    recovery_by_arm: dict[str, dict[int, list[float]]] = {}
+    for row in rows:
+        correct_by_arm.setdefault(row.arm, []).append(1.0 if row.correct else 0.0)
+        cost_by_arm.setdefault(row.arm, []).append(float(row.total_tokens))
+        recovery_by_arm.setdefault(row.arm, {}).setdefault(row.depth, []).append(
+            1.0 if row.chain_recovered else 0.0
+        )
+
+    points = {arm: (_mean(cost_by_arm[arm]), _mean(correct_by_arm[arm])) for arm in correct_by_arm}
+
+    typer.echo("accuracy-cost Pareto frontier (non-dominated arms):")
+    for arm in _pareto_frontier(points):
+        cost, acc = points[arm]
+        typer.echo(f"  {arm:<18} cost={cost:.1f}  accuracy={acc:.3f}")
+
+    typer.echo("area under depth-recovery curve (AUDC) per arm:")
+    for arm in sorted(recovery_by_arm):
+        recovery = {depth: _mean(vals) for depth, vals in recovery_by_arm[arm].items()}
+        typer.echo(f"  {arm:<18} audc={_audc(recovery):.3f}")
 
 
 if __name__ == "__main__":  # pragma: no cover
