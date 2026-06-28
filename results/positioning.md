@@ -70,4 +70,6 @@ of typed links, not extraction — not an end-to-end product win.
 | code-history / memory mgmt | **top-tier** | real-code recall/κ #1 (`tab:realret`) + public benchmarks (`tab:stdbench`) + token economics | high on the paper's axes |
 | 41-axis scorecard | **22 W / 14 m / 5 l** | `tab:scorecard` — losses kept, not hidden | reported honestly |
 
-See `positioning_map.png` for the two-axis landscape.
+For the two-axis landscape see the paper's competitor-landscape figures
+(`F052_competitor_bars.png`, `F053_capability_heatmap.png`, and the `F063_bubble.png`
+positioning bubble), indexed in [`FIGURES.md`](FIGURES.md).
