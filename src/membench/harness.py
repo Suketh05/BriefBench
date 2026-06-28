@@ -4,17 +4,31 @@ Ties the pieces together into one call: load a dataset's tasks, run each memory 
 against the (offline-stub by default) model under the fixed budget, score every
 attempt, and return the canonical scored rows. Helpers persist those rows to JSONL
 so the tables/report/figures commands can consume a finished run.
+
+Arms may be supplied as registry name strings (the default), as ready
+:class:`~membench.retrieval.base.MemorySystem` instances, or as ``(name, factory)``
+pairs, so a researcher can evaluate an *unregistered* custom arm. Each arm is
+materialised fresh per task via the Factory Method pattern -- a name resolves through
+the registry's ``build_arm``, a ``(name, factory)`` calls ``factory()``, and a bare
+instance is reconstructed with :func:`copy.deepcopy`; in every case no per-task state
+leaks into the next, preserving the runtime fairness lock.
+
+References
+----------
+Gamma, E., Helm, R., Johnson, R., & Vlissides, J. (1994). *Design Patterns: Elements
+of Reusable Object-Oriented Software* (Factory Method, pp. 107-116). Addison-Wesley.
 """
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from membench.agents.combos import Combo, build_system
+from membench.agents.combos import Combo, build_system, make_llm_client
 from membench.agents.runner import RunConfig, run_task
 from membench.analysis.tables import ABLATION_DATASETS, ScoredRow, score_records
 from membench.config.schema import BenchmarkConfig
@@ -24,7 +38,17 @@ from membench.datasets.swebench import load_swebench_tasks
 from membench.datasets.synthetic import load_synthetic_tasks
 from membench.manifest import RunManifest, capture_manifest
 from membench.retrieval import builtin  # noqa: F401  (register all arms)
+from membench.retrieval.base import MemorySystem
 from membench.types import SpecVariant, Task
+
+# An arm to evaluate, expressed in one of three ways (all resolved by :func:`_normalize_arm`):
+#   * a registry ``name`` (``str``)              -- built fresh per task via ``build_arm``;
+#   * a ready ``MemorySystem`` instance          -- deep-copied fresh per task;
+#   * a ``(name, factory)`` pair                  -- ``factory()`` called fresh per task.
+# The latter two let a researcher evaluate an unregistered, ad-hoc custom arm without
+# touching the global registry, while the existing string path is unchanged.
+ArmFactory = Callable[[], MemorySystem]
+ArmSpec = str | MemorySystem | tuple[str, Callable[..., MemorySystem]]
 
 __all__ = [
     "ABLATION_ARMS",
@@ -59,6 +83,41 @@ DEFAULT_ARMS: tuple[str, ...] = (
 ABLATION_ARMS: tuple[str, ...] = ("none", "brief_graph_3hop", "random_context")
 
 
+def _normalize_arm(arm: ArmSpec) -> tuple[str, ArmFactory | None]:
+    """Resolve an arm spec to its name and an optional fresh-instance factory.
+
+    Parameters
+    ----------
+    arm : str or MemorySystem or tuple of (str, callable)
+        A registry name, a ready memory arm instance, or a ``(name, factory)`` pair.
+
+    Returns
+    -------
+    name : str
+        The arm label recorded on every row (``arm_name`` passed to the runner).
+    factory : callable or None
+        A zero-argument callable returning a *fresh* :class:`MemorySystem` for each
+        task, or ``None`` for a registry name (whose fresh build is delegated to the
+        unchanged :func:`~membench.agents.combos.build_system` string path).
+
+    Raises
+    ------
+    TypeError
+        If ``arm`` is a tuple whose shape is not ``(str, callable)``.
+    """
+    if isinstance(arm, str):
+        return arm, None
+    if isinstance(arm, MemorySystem):
+        return type(arm).__name__, lambda: copy.deepcopy(arm)
+    name, factory = arm
+    if not isinstance(name, str) or not callable(factory):
+        raise TypeError(
+            "an ad-hoc arm must be a name str, a MemorySystem instance, or a "
+            f"(name: str, factory: callable) pair; got {arm!r}"
+        )
+    return name, lambda: factory()
+
+
 def load_tasks(dataset: str, *, per_depth: int = 10, seed: int = 0) -> list[Task]:
     """Load a dataset's tasks across its depth range."""
     if dataset == "synthetic":
@@ -82,7 +141,7 @@ def load_tasks(dataset: str, *, per_depth: int = 10, seed: int = 0) -> list[Task
 
 def run_benchmark(
     dataset: str = "synthetic",
-    arms: Sequence[str] = DEFAULT_ARMS,
+    arms: Sequence[ArmSpec] = DEFAULT_ARMS,
     budget: int = 150,
     *,
     per_depth: int = 10,
@@ -98,15 +157,29 @@ def run_benchmark(
     every arm runs at the same ``budget`` and ``model`` (the fairness lock), and the
     attempts are scored into canonical rows. :func:`run_sweep` and :func:`run_from_config`
     both delegate here so there is one execution path.
+
+    Parameters
+    ----------
+    arms : sequence of (str or MemorySystem or (str, callable))
+        Each entry is a registry name (the default, built fresh per task via the
+        registry), a ready :class:`MemorySystem` instance (deep-copied fresh per task),
+        or a ``(name, factory)`` pair (``factory()`` called fresh per task). The mixed
+        sequence lets an unregistered, ad-hoc custom arm be evaluated alongside the
+        built-ins; the registry-name path is byte-for-byte unchanged.
     """
     tasks = load_tasks(dataset, per_depth=per_depth, seed=seed)
     tasks_by_id = {t.task_id: t for t in tasks}
     config = RunConfig(budget_tokens=budget, retry_policy=retry_policy)
     records = []
     for arm in arms:
+        name, factory = _normalize_arm(arm)
         for task in tasks:
-            llm, memory = build_system(Combo(arm, model, arm), offline=offline)
-            records.extend(run_task(task, memory, llm, config, arm_name=arm))
+            if factory is None:
+                llm, memory = build_system(Combo(name, model, name), offline=offline)
+            else:
+                llm = make_llm_client(model, offline=offline)
+                memory = factory()
+            records.extend(run_task(task, memory, llm, config, arm_name=name))
     return score_records(records, tasks_by_id)
 
 
