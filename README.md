@@ -230,7 +230,10 @@ The fairness lock lives in the config: budget is keyed **by dataset, never by ar
 [`configs/default.yaml`](configs/default.yaml); the headline arms are `none, bm25, tfidf,
 dense, hybrid_rrf, rerank_ce, raptor, brief_graph_3hop`).
 
-Pre-rendered figures are indexed in [`results/FIGURES.md`](results/FIGURES.md).
+The manuscript's figures (108 files, `F*.png`) ship under
+[`results/figures/`](results/figures) and are indexed, with the paper's verbatim
+captions, in [`results/FIGURES.md`](results/FIGURES.md). These are the paper's own
+figures (the source of truth), not plots re-measured by this repository.
 
 > **Note on the manuscript PDF.** The full paper (≈91 pp.) is a preliminary working
 > draft and, per its own availability statement, is *not redistributed* with this repo.
