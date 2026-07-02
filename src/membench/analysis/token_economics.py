@@ -45,6 +45,7 @@ __all__ = [
     "MatchupOutcome",
     "SessionRecord",
     "TournamentSummary",
+    "competitor_savings_pct",
     "decide_matchup",
     "efficiency_score",
     "pair_matchups",
@@ -52,6 +53,7 @@ __all__ = [
     "session_tokens_from_turns",
     "sweep_matchup_count",
     "tokens_per_resolved_point",
+    "win_count_from_published_pct",
 ]
 
 BRIEF_SYSTEM = "brief"
@@ -497,3 +499,81 @@ def tokens_per_resolved_point(session_tokens: float, resolution_pct: float) -> f
     if resolution_pct == 0.0:
         return None
     return session_tokens / resolution_pct
+
+
+def competitor_savings_pct(brief_tokens: int, competitor_tokens: int) -> float:
+    """Competitor's token-savings margin on a Brief-loss row, in percent.
+
+    ``100 * (brief_tokens - competitor_tokens) / brief_tokens`` — how much
+    cheaper the competitor's session was, relative to Brief's spend. This is
+    the margin of the honest-losses table (``tab:tok_context_brief_losses``),
+    e.g. GPT-5.3 Codex / swe-004 / none: ``100 * (1938 - 1593) / 1938 =
+    17.80...`` (printed "17.8"). Only meaningful on loss rows, so a non-loss
+    (competitor not strictly cheaper) raises.
+
+    Parameters
+    ----------
+    brief_tokens:
+        Brief's session tokens on the cell (positive).
+    competitor_tokens:
+        Competitor's session tokens on the same cell; strictly smaller.
+
+    Returns
+    -------
+    float
+        Savings margin in percent, in ``(0, 100)``.
+    """
+    if decide_matchup(brief_tokens, competitor_tokens) is not MatchupOutcome.BRIEF_LOSS:
+        raise ValueError(
+            "competitor_savings_pct is defined on Brief-loss rows only "
+            f"(competitor strictly cheaper), got brief={brief_tokens!r}, "
+            f"competitor={competitor_tokens!r}"
+        )
+    return 100.0 * (brief_tokens - competitor_tokens) / brief_tokens
+
+
+def win_count_from_published_pct(pct: float, matchups: int = 360, decimals: int = 1) -> int:
+    """Invert a published, rounded win-rate percentage back to its integer win count.
+
+    The paper publishes per-competitor win rates rounded to one decimal
+    (``tab:tok_context_by_competitor``); with 360 matchups per layer the grid
+    spacing is ``100 / 360 = 0.2777...`` percentage points, coarser than the
+    0.1-point print precision, so each published value pins a *unique* integer
+    win count (e.g. 80.8% -> exactly 291 of 360). This is the arithmetic a
+    reader runs to cross-check that the ten published percentages are mutually
+    consistent with the headline 2880/3600.
+
+    Parameters
+    ----------
+    pct:
+        Published win rate in percent, in ``[0, 100]``.
+    matchups:
+        Slice size the rate was computed over (paper: 360).
+    decimals:
+        Print precision of the published value (paper: 1).
+
+    Returns
+    -------
+    int
+        The unique ``wins`` with ``round(100 * wins / matchups, decimals) == pct``.
+
+    Raises
+    ------
+    ValueError
+        If no integer count rounds to ``pct``, or if more than one does (the
+        published precision is too coarse to invert uniquely).
+    """
+    if matchups <= 0:
+        raise ValueError(f"matchups must be positive, got {matchups!r}")
+    if not 0.0 <= pct <= 100.0:
+        raise ValueError(f"pct must be in [0, 100], got {pct!r}")
+    candidates = [
+        wins for wins in range(matchups + 1) if round(100.0 * wins / matchups, decimals) == pct
+    ]
+    if not candidates:
+        raise ValueError(f"no win count out of {matchups} rounds to {pct}%")
+    if len(candidates) > 1:
+        raise ValueError(
+            f"published precision is ambiguous: counts {candidates} all round to {pct}%"
+        )
+    return candidates[0]
