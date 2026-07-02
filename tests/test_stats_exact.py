@@ -73,3 +73,43 @@ class TestClopperPearsonClosedFormBoundaries:
         assert res.method == "clopper_pearson"
         assert res.estimate == pytest.approx(3 / 7)
         assert math.isfinite(res.low) and math.isfinite(res.high)
+
+
+class TestPaperWorkedExampleJ:
+    """Paper worked example (j): chain recovery at synthetic d=3 (fig:chain).
+
+    Quoting app:worked (j): "The typed store recovers 40/40 chains at synthetic
+    d=3; the Clopper--Pearson exact 95% interval for 40/40 is
+    [(0.025)^{1/40}, 1] = [0.912, 1.000] (lower limit = 0.025^{1/40} from
+    inverting the binomial tail), whereas bm25 at 0.70 (28/40) gives
+    [0.534, 0.834], disjoint."
+
+    The 40/40 lower endpoint is the closed form 0.025**(1/40) evaluated in
+    float64; 0.912 is its 3-dp rounding. For 28/40 the exact limits are
+    (0.53468..., 0.83437...): the paper's printed upper endpoint 0.834 is the
+    3-dp rounding, while its printed lower endpoint 0.534 is the 3-dp
+    TRUNCATION of 0.53468 (round-half-up would give 0.535) -- we assert both
+    published digits via the rounding rule that reproduces them, and pin
+    correctness itself to the exact tail-inversion identity in the class below.
+    """
+
+    def test_typed_store_40_of_40(self) -> None:
+        res = clopper_pearson(40, 40, alpha=0.05)
+        assert res.low == pytest.approx(0.025 ** (1.0 / 40.0), rel=1e-12)
+        assert round(res.low, 3) == 0.912  # the paper's printed lower limit
+        assert res.high == 1.0  # the paper's printed upper limit
+        assert res.low <= 1.0 and res.high <= 1.0  # never leaves [0, 1]
+
+    def test_bm25_28_of_40(self) -> None:
+        res = clopper_pearson(28, 40, alpha=0.05)
+        assert res.estimate == pytest.approx(0.70)  # "bm25 at 0.70"
+        assert round(res.high, 3) == 0.834  # paper's printed upper endpoint
+        # Paper prints 0.534: the truncation of the exact 0.53468... (see class
+        # docstring); assert the printed digits via floor-to-3-dp.
+        assert math.floor(res.low * 1000.0) / 1000.0 == 0.534
+
+    def test_intervals_disjoint(self) -> None:
+        # The worked example's punchline: the two exact intervals do not overlap.
+        typed = clopper_pearson(40, 40, alpha=0.05)
+        bm25 = clopper_pearson(28, 40, alpha=0.05)
+        assert typed.low > bm25.high
