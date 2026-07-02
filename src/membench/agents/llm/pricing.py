@@ -5,6 +5,18 @@ from the published Anthropic pricing table (cached 2026-06; update here on a
 reprice). GPT and open-weight rows are placeholders flagged for verification
 against current vendor pricing before any dollar figure is published; they do not
 affect the offline reproducible runs, which use the deterministic stub model.
+
+Two price tables live here, and they answer different questions:
+
+* :data:`PRICING` — vendor input/output rates, used by the live clients for
+  per-call cost accounting.
+* :data:`PAPER_SESSION_RATES` — the flat *blended* per-session-token rates the
+  paper's token-economics tables imply (``sec:tokecon``:
+  ``tab:tok_agent_context_gpt55`` for GPT-5.5, ``tab:tok_agent_economics`` for
+  gpt-4o). These reproduce the paper's USD columns exactly and are the rates
+  the session-ledger goldens assert against. Models the paper does not price
+  are deliberately absent (see :data:`UNPRICED_SWEEP_MODELS`); no price is ever
+  invented here.
 """
 
 from __future__ import annotations
@@ -14,6 +26,7 @@ from dataclasses import dataclass
 __all__ = [
     "PAPER_SESSION_RATES",
     "PRICING",
+    "UNPRICED_SWEEP_MODELS",
     "BlendedSessionRate",
     "ModelPricing",
     "blended_session_dollars",
@@ -83,6 +96,26 @@ only with token counts, never with a USD column, so no paper price exists for
 them and none is invented here. (Claude Opus 4.8 has a vendor-sourced
 input/output row in :data:`PRICING`; that is Anthropic's published price, not a
 paper-stated one, and the two tables are kept separate for exactly that reason.)
+"""
+
+
+UNPRICED_SWEEP_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-5.3-codex",
+        "claude-opus-4-8",
+        "mistral-large-3",
+        "gemini-3.5-flash",
+        "composer-2.5",
+        "kimi-k2.5",
+    }
+)
+"""Sweep backends the paper names but never prices (integrity registry).
+
+These models appear in ``sec:tokecon`` (the 12-backend sweep) and in the loss
+sample ``tab:tok_context_brief_losses`` with token counts only — the paper
+publishes no USD figure for them, so :data:`PAPER_SESSION_RATES` must never
+grow a row for one of these without a new primary source. The remaining sweep
+backends are not individually named in the paper at all.
 """
 
 
