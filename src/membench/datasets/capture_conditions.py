@@ -49,15 +49,18 @@ dropped, only de-unitised.
 
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from enum import Enum
 
+from membench.datasets.synthetic import AREAS
 from membench.types import MemoryItem, Task
 
 __all__ = [
     "DEFAULT_SIGMA",
     "TYPED_LINK_KEYS",
     "CaptureCondition",
+    "shred_scattered",
     "strip_edges",
 ]
 
@@ -142,3 +145,133 @@ def strip_edges(task: Task) -> Task:
         task,
         memory_corpus=tuple(_strip_item(item) for item in task.memory_corpus),
     )
+
+
+def _partition(words: list[str], n_fragments: int) -> list[list[str]]:
+    """Split ``words`` into ``n_fragments`` contiguous chunks, as evenly as possible.
+
+    The standard even partition (``numpy.array_split`` semantics): the first
+    ``len(words) % n_fragments`` chunks receive one extra word. Contiguity is
+    what makes the shred "reversible in count": concatenating the chunks in
+    order reproduces the original token sequence exactly.
+    """
+    total = len(words)
+    base, extra = divmod(total, n_fragments)
+    chunks: list[list[str]] = []
+    start = 0
+    for k in range(n_fragments):
+        size = base + (1 if k < extra else 0)
+        chunks.append(words[start : start + size])
+        start += size
+    return chunks
+
+
+def shred_scattered(task: Task, sigma: int = DEFAULT_SIGMA, *, seed: int = 0) -> Task:
+    """Transform a task into the **Raw-scattered** condition.
+
+    Strips the typed edges *and* shreds every captured decision unit back into
+    raw fragments dispersed across ``sigma`` distractor areas -- "the closest
+    in-harness proxy for 'no capture at all'" (Subsection ``sec:capconds``).
+    Concretely, for every corpus item that was captured as a typed unit (it
+    carries a ``node_type``: the synthetic generator's entry / policy /
+    governing nodes), the item's whitespace-token sequence is partitioned into
+    ``min(sigma, token_count)`` contiguous fragments; each fragment becomes its
+    own :class:`~membench.types.MemoryItem` whose text is the fragment payload
+    followed by a parenthetical aside written in a *different* engineering
+    area's vocabulary, as if the decision had only ever been mentioned in
+    passing across unrelated raw notes. Items that were never captured as units
+    (no ``node_type``; the corpus filler) pass through with only the link strip.
+
+    Fragment placement rotates through a seed-shuffled pool of areas
+    (:data:`~membench.datasets.synthetic.AREAS`), so the fragments of one
+    decision land in ``sigma`` *distinct* areas whenever ``sigma`` does not
+    exceed the pool size -- the "split each decision across sigma distractor
+    areas" manipulation. Recovering a decision therefore requires retrieving
+    all ``sigma`` of its fragments, the assembly event whose success the theory
+    bounds by ``P_asm(sigma) = p^sigma`` (Equation ``eq:scatter``, Theorem
+    ``thm:scatter``); under this condition every arm in the paper collapses
+    into the floor band 0.27--0.37, mean 0.35 (Table ``tab:capexp``, Section
+    ``sec:capture``).
+
+    Gold semantics: every gold id in ``governing_decisions`` that was shredded
+    is replaced by all of its fragment ids (order preserved), so per-task
+    recall becomes the *fraction of the governing decision's fragments
+    assembled* and full-chain recovery requires all of them.
+
+    Conservation guarantees (asserted by the test suite):
+
+    * no text lost -- for every shredded item, joining the fragments'
+      ``payload`` metadata in ``fragment_index`` order reproduces the original
+      whitespace-token sequence exactly;
+    * count-reversible -- each shredded item maps to exactly
+      ``fragment_count`` fragments and every original id is recoverable from
+      ``shredded_from``.
+
+    Parameters
+    ----------
+    task
+        The CAPTURED-condition task to transform (never mutated).
+    sigma
+        Number of fragments (and target distractor areas) per decision,
+        ``>= 1``. Items with fewer tokens than ``sigma`` produce one fragment
+        per token (saturation). The paper does not publish its Raw-scattered
+        ``sigma`` (see :data:`DEFAULT_SIGMA`).
+    seed
+        Seed for the deterministic area-pool shuffle; the same task, ``sigma``,
+        and ``seed`` always produce an identical output.
+
+    Returns
+    -------
+    Task
+        A new task whose corpus contains link-free fragments in place of the
+        captured units, with ``governing_decisions`` remapped to fragment ids.
+
+    Raises
+    ------
+    ValueError
+        If ``sigma < 1``.
+    """
+    if sigma < 1:
+        raise ValueError(f"sigma must be >= 1, got {sigma}")
+    rng = random.Random(seed)
+    pool = list(AREAS)
+    rng.shuffle(pool)
+
+    corpus: list[MemoryItem] = []
+    fragment_ids: dict[str, tuple[str, ...]] = {}
+    cursor = 0  # advances through the area pool so consecutive items scatter differently
+    for item in task.memory_corpus:
+        base = _strip_item(item)
+        if base.node_type is None:
+            corpus.append(base)
+            continue
+        words = base.text.split()
+        n_fragments = max(1, min(sigma, len(words)))
+        ids: list[str] = []
+        for k, chunk in enumerate(_partition(words, n_fragments)):
+            area = pool[(cursor + k) % len(pool)]
+            payload = " ".join(chunk)
+            frag_id = f"{base.item_id}::frag{k}"
+            text = f"{payload} (noted in passing during {area.name} work on the {area.feature})"
+            corpus.append(
+                MemoryItem(
+                    frag_id,
+                    text,
+                    metadata={
+                        "node_type": "fragment",
+                        "shredded_from": base.item_id,
+                        "fragment_index": k,
+                        "fragment_count": n_fragments,
+                        "payload": payload,
+                        "scatter_area": area.slug,
+                    },
+                )
+            )
+            ids.append(frag_id)
+        fragment_ids[base.item_id] = tuple(ids)
+        cursor += n_fragments
+
+    gold: list[str] = []
+    for gold_id in task.governing_decisions:
+        gold.extend(fragment_ids.get(gold_id, (gold_id,)))
+    return replace(task, memory_corpus=tuple(corpus), governing_decisions=tuple(gold))
