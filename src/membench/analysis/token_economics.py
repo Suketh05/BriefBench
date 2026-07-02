@@ -44,6 +44,7 @@ __all__ = [
     "MatchupOutcome",
     "SessionRecord",
     "decide_matchup",
+    "pair_matchups",
     "session_tokens_from_turns",
     "sweep_matchup_count",
 ]
@@ -219,3 +220,66 @@ def sweep_matchup_count(n_llms: int, n_tasks: int, n_competitors: int) -> int:
             f"n_llms={n_llms!r}, n_tasks={n_tasks!r}, n_competitors={n_competitors!r}"
         )
     return n_llms * n_tasks * n_competitors
+
+
+def pair_matchups(
+    brief_sessions: Iterable[SessionRecord],
+    competitor_sessions: Iterable[SessionRecord],
+) -> list[Matchup]:
+    """Pair every competitor session against the Brief session on its cell.
+
+    Builds the tournament of ``tab:tok_context_winrate``: for each competitor
+    session on an (LLM, task) cell there must be exactly one Brief session on
+    the same cell, and the pair forms one matchup. The pairing is total and
+    injective by construction — a duplicate Brief cell, a duplicate
+    (competitor, LLM, task) session, a competitor session with no Brief
+    counterpart, or a session on the wrong side all raise ``ValueError``
+    rather than silently dropping or double-counting a cell.
+
+    Parameters
+    ----------
+    brief_sessions:
+        Sessions whose ``system`` is :data:`BRIEF_SYSTEM`, one per (LLM, task)
+        cell that appears in ``competitor_sessions``.
+    competitor_sessions:
+        Sessions of every non-Brief context layer (including ``"none"``).
+
+    Returns
+    -------
+    list[Matchup]
+        One matchup per competitor session, in input order.
+    """
+    brief_by_cell: dict[tuple[str, str], SessionRecord] = {}
+    for record in brief_sessions:
+        if record.system != BRIEF_SYSTEM:
+            raise ValueError(
+                f"brief_sessions must have system={BRIEF_SYSTEM!r}, got {record.system!r}"
+            )
+        cell = (record.llm, record.task)
+        if cell in brief_by_cell:
+            raise ValueError(f"duplicate Brief session for cell (llm, task)={cell!r}")
+        brief_by_cell[cell] = record
+
+    matchups: list[Matchup] = []
+    seen: set[tuple[str, str, str]] = set()
+    for record in competitor_sessions:
+        if record.system == BRIEF_SYSTEM:
+            raise ValueError("competitor_sessions must not contain Brief sessions")
+        key = (record.system, record.llm, record.task)
+        if key in seen:
+            raise ValueError(f"duplicate competitor session for (system, llm, task)={key!r}")
+        seen.add(key)
+        cell = (record.llm, record.task)
+        brief = brief_by_cell.get(cell)
+        if brief is None:
+            raise ValueError(f"no Brief session for cell (llm, task)={cell!r}")
+        matchups.append(
+            Matchup(
+                llm=record.llm,
+                task=record.task,
+                competitor=record.system,
+                brief_tokens=brief.session_tokens,
+                competitor_tokens=record.session_tokens,
+            )
+        )
+    return matchups
