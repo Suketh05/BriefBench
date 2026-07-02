@@ -20,9 +20,11 @@ from collections import defaultdict
 import pytest
 
 from membench.datasets.capture_conditions import (
+    DEFAULT_SIGMA,
     TYPED_LINK_KEYS,
     CaptureCondition,
     apply_condition,
+    shred_scattered,
     strip_edges,
 )
 from membench.datasets.synthetic import load_synthetic_tasks
@@ -90,3 +92,118 @@ class TestStripEdges:
         task = _synthetic_task(depth=1)
         with pytest.raises(ValueError):
             apply_condition(task, "shredded")  # not one of the three conditions
+
+
+class TestShredScattered:
+    def test_deterministic_with_seed(self) -> None:
+        task = _synthetic_task(depth=3)
+        a = shred_scattered(task, 3, seed=7)
+        b = shred_scattered(task, 3, seed=7)
+        assert a == b  # ids, texts, metadata, gold: all identical
+
+    def test_no_text_lost(self) -> None:
+        # Reversible-in-count: for every shredded unit, the fragments' payloads
+        # joined in fragment_index order reproduce the original whitespace-token
+        # sequence exactly. Nothing is dropped, only de-unitised.
+        task = _synthetic_task(depth=3)
+        originals = {i.item_id: i for i in task.memory_corpus if i.node_type is not None}
+        for sigma in (1, 2, 3, 5):
+            shredded = shred_scattered(task, sigma, seed=0)
+            groups = _shredded_fragments(shredded)
+            assert set(groups) == set(originals)  # every unit shredded, none invented
+            for item_id, fragments in groups.items():
+                joined = " ".join(str(f.metadata["payload"]) for f in fragments)
+                assert joined.split() == originals[item_id].text.split()
+
+    def test_reversible_in_count(self) -> None:
+        # Each captured unit maps to exactly min(sigma, token_count) fragments,
+        # and the corpus size is fillers + sum of fragment counts (count identity).
+        task = _synthetic_task(depth=2)
+        sigma = 3
+        shredded = shred_scattered(task, sigma, seed=0)
+        originals = [i for i in task.memory_corpus if i.node_type is not None]
+        fillers = [i for i in task.memory_corpus if i.node_type is None]
+        groups = _shredded_fragments(shredded)
+        expected_total = len(fillers)
+        for item in originals:
+            expected = min(sigma, len(item.text.split()))
+            fragments = groups[item.item_id]
+            assert len(fragments) == expected
+            assert all(int(f.metadata["fragment_count"]) == expected for f in fragments)
+            expected_total += expected
+        assert len(shredded.memory_corpus) == expected_total
+
+    def test_fragments_carry_no_typed_links(self) -> None:
+        # Raw-scattered = strip AND shred; a fragment must never be traversable.
+        shredded = shred_scattered(_synthetic_task(depth=3), 3, seed=0)
+        for item in shredded.memory_corpus:
+            for key in TYPED_LINK_KEYS:
+                assert key not in item.metadata
+
+    def test_gold_remapped_to_all_fragments(self) -> None:
+        task = _synthetic_task(depth=2)
+        shredded = shred_scattered(task, 3, seed=0)
+        (gold_id,) = task.governing_decisions
+        expected = tuple(f.item_id for f in _shredded_fragments(shredded)[gold_id])
+        assert shredded.governing_decisions == expected
+        assert len(expected) == 3  # the rule text is long enough for sigma fragments
+
+    def test_fragments_of_one_decision_land_in_distinct_areas(self) -> None:
+        # "split each decision across sigma distractor areas": with sigma at most
+        # the 10-area pool size, the sigma fragments occupy sigma distinct areas.
+        task = _synthetic_task(depth=3)
+        for sigma in (2, 3, 4):
+            shredded = shred_scattered(task, sigma, seed=0)
+            for fragments in _shredded_fragments(shredded).values():
+                areas = [str(f.metadata["scatter_area"]) for f in fragments]
+                assert len(set(areas)) == len(areas)
+
+    def test_sigma_one_keeps_whole_payload_in_one_fragment(self) -> None:
+        task = _synthetic_task(depth=1)
+        shredded = shred_scattered(task, 1, seed=0)
+        for item_id, fragments in _shredded_fragments(shredded).items():
+            assert len(fragments) == 1
+            payload = str(fragments[0].metadata["payload"])
+            assert payload.split() == dict(task.corpus_by_id)[item_id].text.split()
+
+    def test_saturation_when_text_shorter_than_sigma(self) -> None:
+        # A 3-token decision cannot shed into 5 fragments; it saturates at one
+        # fragment per token (and still conserves the text).
+        tiny = Task(
+            task_id="cap-tiny",
+            dataset="synthetic",
+            query="anything",
+            repo_ref="synthetic://capture",
+            memory_corpus=(
+                MemoryItem("d1", "use audit logging", metadata={"node_type": "governing"}),
+            ),
+            governing_decisions=("d1",),
+            depth=1,
+            spec_variant="stripped",
+            scorer="compliance",
+        )
+        shredded = shred_scattered(tiny, 5, seed=0)
+        fragments = _shredded_fragments(shredded)["d1"]
+        assert len(fragments) == 3
+        assert [str(f.metadata["payload"]) for f in fragments] == ["use", "audit", "logging"]
+        assert shredded.governing_decisions == tuple(f.item_id for f in fragments)
+
+    def test_filler_items_pass_through_link_stripped_only(self) -> None:
+        task = _synthetic_task(depth=2)
+        shredded = shred_scattered(task, 3, seed=0)
+        by_id = dict(shredded.corpus_by_id)
+        for item in task.memory_corpus:
+            if item.node_type is None:
+                assert by_id[item.item_id].text == item.text
+
+    def test_rejects_sigma_below_one(self) -> None:
+        task = _synthetic_task(depth=1)
+        with pytest.raises(ValueError, match="sigma"):
+            shred_scattered(task, 0)
+        with pytest.raises(ValueError, match="sigma"):
+            shred_scattered(task, -2)
+
+    def test_default_sigma_used_by_dispatcher(self) -> None:
+        task = _synthetic_task(depth=2)
+        via_dispatch = apply_condition(task, CaptureCondition.RAW_SCATTERED, seed=3)
+        assert via_dispatch == shred_scattered(task, DEFAULT_SIGMA, seed=3)
