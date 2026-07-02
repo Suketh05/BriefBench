@@ -205,7 +205,7 @@ def session_tokens_from_turns(turn_tokens: Sequence[int]) -> int:
 
 
 def sweep_matchup_count(n_llms: int, n_tasks: int, n_competitors: int) -> int:
-    """Number of matchups in a full crossed sweep.
+    """Count the matchups in a full crossed sweep.
 
     One matchup per (LLM x task x competing context layer) cell, so the total
     is the plain product. Paper instance (``tab:tok_context_winrate``):
