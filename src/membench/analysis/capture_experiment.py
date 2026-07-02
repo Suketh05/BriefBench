@@ -42,7 +42,20 @@ aggregation from whatever corpus and parameters it is given.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from membench.datasets.capture_conditions import (
+    DEFAULT_SIGMA,
+    CaptureCondition,
+    apply_condition,
+)
+from membench.datasets.synthetic import load_synthetic_tasks
+from membench.metrics.retrieval import score_retrieval
+from membench.retrieval import bm25, dense, tfidf  # noqa: F401  (register the lexical/dense arms)
+from membench.retrieval.base import build_arm
+from membench.retrieval.graph import arm as _graph_arm  # noqa: F401  (register the graph arm)
+from membench.types import Task
 
 __all__ = [
     "CAPTURE_RETRIEVERS",
@@ -50,6 +63,7 @@ __all__ = [
     "DEFAULT_DEPTHS",
     "DEFAULT_PER_DEPTH",
     "CaptureRow",
+    "run_capture_experiment",
 ]
 
 CAPTURE_RETRIEVERS: tuple[str, ...] = ("brief_graph_3hop", "bm25", "tfidf", "dense")
@@ -91,3 +105,77 @@ class CaptureRow:
     chain_recovered: bool
     n_gold: int
     n_retrieved: int
+
+
+def run_capture_experiment(
+    retrievers: Sequence[str] = CAPTURE_RETRIEVERS,
+    *,
+    depths: tuple[int, ...] = DEFAULT_DEPTHS,
+    per_depth: int = DEFAULT_PER_DEPTH,
+    budget: int = DEFAULT_BUDGET,
+    sigma: int = DEFAULT_SIGMA,
+    seed: int = 0,
+    tasks: Sequence[Task] | None = None,
+) -> list[CaptureRow]:
+    """Run all three storage conditions through the offline retrieval harness.
+
+    For every condition of Subsection ``sec:capconds``, transforms the same
+    task set (pairing), then for every retriever and task builds a *fresh* arm,
+    writes the condition's corpus, retrieves under the shared budget, and
+    scores the returned ids against the condition's gold ids. Deterministic:
+    the synthetic corpus, the shred, and every default arm are seeded or
+    seed-free deterministic, so the same arguments always yield identical rows.
+
+    Parameters
+    ----------
+    retrievers
+        Registry names of the arms to run (default: the Table ``tab:capexp``
+        retriever column).
+    depths, per_depth, seed
+        Passed to :func:`membench.datasets.synthetic.load_synthetic_tasks`
+        when ``tasks`` is not supplied; ``seed`` also seeds the shred.
+    budget
+        Token budget shared by every arm, condition, and task.
+    sigma
+        Fragment count for the Raw-scattered condition.
+    tasks
+        Optional explicit CAPTURED-condition task list (e.g. a hand-built
+        corpus in tests); when given, ``depths``/``per_depth`` are not used to
+        generate tasks.
+
+    Returns
+    -------
+    list of CaptureRow
+        One row per (condition, retriever, task), in condition-major order
+        (conditions in :class:`CaptureCondition` declaration order, then
+        ``retrievers`` order, then task order).
+    """
+    base_tasks: Sequence[Task] = (
+        load_synthetic_tasks(depths=depths, per_depth=per_depth, seed=seed)
+        if tasks is None
+        else tasks
+    )
+    rows: list[CaptureRow] = []
+    for condition in CaptureCondition:
+        transformed = [
+            apply_condition(task, condition, sigma=sigma, seed=seed) for task in base_tasks
+        ]
+        for retriever in retrievers:
+            for task in transformed:
+                arm = build_arm(retriever)  # fresh per task: no cross-task state leakage
+                arm.write(task.memory_corpus)
+                retrieved = arm.retrieve(task.query, budget)
+                score = score_retrieval(retrieved.ids, task.governing_decisions)
+                rows.append(
+                    CaptureRow(
+                        retriever=retriever,
+                        condition=condition.value,
+                        depth=task.depth,
+                        task_id=task.task_id,
+                        recall=score.recall,
+                        chain_recovered=score.chain_recovered,
+                        n_gold=score.gold,
+                        n_retrieved=score.retrieved,
+                    )
+                )
+    return rows
