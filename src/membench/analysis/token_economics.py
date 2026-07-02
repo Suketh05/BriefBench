@@ -46,10 +46,12 @@ __all__ = [
     "SessionRecord",
     "TournamentSummary",
     "decide_matchup",
+    "efficiency_score",
     "pair_matchups",
     "run_tournament",
     "session_tokens_from_turns",
     "sweep_matchup_count",
+    "tokens_per_resolved_point",
 ]
 
 BRIEF_SYSTEM = "brief"
@@ -429,3 +431,69 @@ def run_tournament(
         Overall and per-competitor tallies.
     """
     return TournamentSummary.from_matchups(pair_matchups(brief_sessions, competitor_sessions))
+
+
+def efficiency_score(resolution_pct: float, session_tokens: float, scale: float = 1e5) -> float:
+    """Composite efficiency score: quality per token, scaled for readability.
+
+    ``efficiency = scale * resolution_pct / session_tokens`` with the paper's
+    ``scale = 1e5``. The paper prints this as the "Efficiency score" column of
+    ``tab:tok_agent_economics`` without a formula; the form used here is
+    *verified* (not assumed) by exact agreement, at published precision, with
+    all 16 rows of that table — e.g. Brief ``1e5 * 48.0 / 12400 =
+    387.096... -> 387.1`` and Kluris ``1e5 * 23.6 / 51289 = 46.013... ->
+    46.01`` (see the golden tests). It is a pure quality-per-token ratio;
+    wall-clock does not enter.
+
+    Parameters
+    ----------
+    resolution_pct:
+        Resolution rate in percent, in ``[0, 100]``.
+    session_tokens:
+        Mean total session tokens (positive).
+    scale:
+        Readability multiplier; the paper table uses ``1e5``.
+
+    Returns
+    -------
+    float
+        The composite efficiency score.
+    """
+    if not 0.0 <= resolution_pct <= 100.0:
+        raise ValueError(f"resolution_pct must be in [0, 100], got {resolution_pct!r}")
+    if session_tokens <= 0:
+        raise ValueError(f"session_tokens must be positive, got {session_tokens!r}")
+    if scale <= 0:
+        raise ValueError(f"scale must be positive, got {scale!r}")
+    return scale * resolution_pct / session_tokens
+
+
+def tokens_per_resolved_point(session_tokens: float, resolution_pct: float) -> float | None:
+    """Tokens spent per resolved percentage point ("Tok./res. pt" column).
+
+    ``session_tokens / resolution_pct``; the reciprocal (up to the readability
+    scale) of :func:`efficiency_score`. Paper values
+    (``tab:tok_agent_economics``): Brief ``12400 / 48.0 = 258.33... -> 258.3``
+    vs. competitors 1300-2200. Undefined at zero resolution: a layer that never
+    resolves has no finite token cost per resolved point, so this returns
+    ``None`` rather than raising or fabricating infinity.
+
+    Parameters
+    ----------
+    session_tokens:
+        Mean total session tokens (positive).
+    resolution_pct:
+        Resolution rate in percent, in ``[0, 100]``.
+
+    Returns
+    -------
+    float | None
+        Tokens per resolved point, or ``None`` when ``resolution_pct == 0``.
+    """
+    if session_tokens <= 0:
+        raise ValueError(f"session_tokens must be positive, got {session_tokens!r}")
+    if not 0.0 <= resolution_pct <= 100.0:
+        raise ValueError(f"resolution_pct must be in [0, 100], got {resolution_pct!r}")
+    if resolution_pct == 0.0:
+        return None
+    return session_tokens / resolution_pct
