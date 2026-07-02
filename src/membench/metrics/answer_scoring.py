@@ -24,6 +24,16 @@ the answer-vs-gold scorers themselves:
   deterministic token-overlap verdict so the offline pipeline stays
   reproducible, mirroring the design of :mod:`membench.metrics.compliance`.
 
+Worked example (the identity every F1 here reduces to)
+-------------------------------------------------------
+With 3 predicted and 4 gold facts of which 2 match after normalization:
+``P = 2/3``, ``R = 2/4 = 1/2``, and
+
+    F1 = 2PR/(P+R) = 2*overlap/(n_pred + n_gold) = 2*2/(3+4) = 4/7,
+
+computed as the single integer division on the right-hand side so tiny
+goldens are exact fractions (see :class:`F1Result`).
+
 Numbers from ``tab:stdbench`` are cited for provenance only; nothing in this
 module asserts them -- they are outputs of live runs, not of these formulas.
 The companion resolution scorer lives in :mod:`membench.metrics.resolution`.
