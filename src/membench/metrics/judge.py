@@ -47,7 +47,9 @@ from dataclasses import dataclass
 
 __all__ = [
     "PROMPT_ORDERS",
+    "JudgeCase",
     "JudgeConfig",
+    "JudgeVerdict",
 ]
 
 #: Presentation orders for the reference invariant vs. the agent answer inside the
@@ -103,3 +105,74 @@ class JudgeConfig:
             raise ValueError(f"max_tokens must be positive, got {self.max_tokens}")
         if not self.model:
             raise ValueError("model must be a non-empty string")
+
+
+@dataclass(frozen=True, slots=True)
+class JudgeCase:
+    """Exactly what the judge is shown for one (task, governing decision) unit.
+
+    Section ``sec:grader``: the judge "sees the known invariant as reference but
+    not the arm identity". This dataclass is that contract made structural: there
+    is deliberately **no arm/system/retriever field**, so a caller cannot leak the
+    arm identity into the judge prompt without changing this type. (Section
+    ``sec:gradervalidity`` still flags residual arm-inference from answer *style*;
+    that threat lives in the answer text and cannot be typed away.)
+
+    Parameters
+    ----------
+    task_query
+        The task prompt the agent was answering.
+    invariant_text
+        The governing decision's text -- the reference invariant the rubric checks
+        on the output (e.g. "the PII column does not appear in the export").
+    answer_text
+        The agent's produced answer/edit being graded.
+    decision_id
+        Optional ground-truth id of the governing decision (e.g. ``"D-002"``).
+        Part of the *invariant reference*, not the arm identity; used only as the
+        last-resort honouring target when the invariant names no code identifier,
+        mirroring :func:`membench.metrics.compliance.score_compliance`.
+    """
+
+    task_query: str
+    invariant_text: str
+    answer_text: str
+    decision_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.invariant_text and not self.decision_id:
+            raise ValueError(
+                "JudgeCase needs a reference: invariant_text and decision_id are both empty"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class JudgeVerdict:
+    """One compliance verdict with its rationale and full judge provenance.
+
+    The verdict is boolean because the paper reads the per-task compliance
+    distribution as "sharply bimodal ... indicating the grader is making a
+    near-deterministic invariant check rather than scoring a continuous quality"
+    (Section ``sec:gradervalidity``, Figure ``fig:ecdf_compliance``).
+
+    Parameters
+    ----------
+    compliant
+        Whether the answer honours the governing decision's invariant.
+    rationale
+        The judge's stated reason (rubric step for the stub, model text for the
+        live judge).
+    config
+        The :class:`JudgeConfig` that produced this verdict -- model, version,
+        prompt order, decoding -- so every verdict is attributable
+        (Section ``sec:stats``).
+    parse_ok
+        ``False`` when a live judge's output did not contain a parseable verdict
+        and the grader failed *closed* to non-compliant. Kept on the record so
+        parse failures are auditable rather than silently folded into misses.
+    """
+
+    compliant: bool
+    rationale: str
+    config: JudgeConfig
+    parse_ok: bool = True
