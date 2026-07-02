@@ -13,7 +13,10 @@ import pytest
 
 from membench.metrics.answer_scoring import (
     exact_match,
+    fact_f1,
+    mean_fact_f1,
     normalize_answer,
+    split_facts,
     token_f1,
     tokenize_answer,
 )
@@ -141,3 +144,93 @@ class TestTokenF1:
         result = token_f1("Paris, France, Europe", "Paris France in winter")
         assert min(result.precision, result.recall) <= result.f1
         assert result.f1 <= max(result.precision, result.recall)
+
+
+class TestSplitFacts:
+    def test_splits_on_newlines_semicolons_sentences(self) -> None:
+        text = "Lives in Lyon; works at Acme.\nHas two cats. Plays chess!"
+        assert split_facts(text) == (
+            "Lives in Lyon",
+            "works at Acme.",
+            "Has two cats.",
+            "Plays chess!",
+        )
+
+    def test_drops_empty_fragments(self) -> None:
+        assert split_facts(";;\n\n ; ") == ()
+
+    def test_single_fact_untouched(self) -> None:
+        assert split_facts("moved to Berlin in 2021") == ("moved to Berlin in 2021",)
+
+
+class TestFactF1:
+    def test_golden_two_of_three_predicted_two_of_four_gold(self) -> None:
+        # Hand-computed (the tab:stdbench DMR metric on a tiny set):
+        # predicted facts 3, gold facts 4, matched (normalized-identical) 2.
+        # P = 2/3, R = 2/4 = 1/2, F1 = 2PR/(P+R) = 2*2/(3+4) = 4/7.
+        predicted = ["Lives in Lyon", "Works at Acme", "Owns a dog"]
+        gold = ["lives in lyon!", "works at Acme.", "has two cats", "plays chess"]
+        result = fact_f1(predicted, gold)
+        assert result.overlap == 2
+        assert result.n_predicted == 3
+        assert result.n_gold == 4
+        assert result.precision == 2 / 3
+        assert result.recall == 1 / 2
+        assert result.f1 == 4 / 7  # exact fraction
+
+    def test_duplicate_facts_deduplicate(self) -> None:
+        # Restating the same fact (any surface form) neither helps nor hurts:
+        # both predictions normalize to one fact -> P = R = F1 = 1.
+        result = fact_f1(["Lives in Lyon.", "lives in LYON"], ["lives in lyon"])
+        assert result.n_predicted == 1
+        assert result.f1 == 1.0
+
+    def test_hallucinated_facts_cost_precision_only(self) -> None:
+        # All 2 gold facts recovered plus 2 inventions: R = 1, P = 2/4 = 1/2,
+        # F1 = 2*2/(4+2) = 2/3.
+        predicted = ["fact one", "fact two", "invented three", "invented four"]
+        result = fact_f1(predicted, ["fact one", "fact two"])
+        assert result.recall == 1.0
+        assert result.precision == 1 / 2
+        assert result.f1 == 2 / 3
+
+    def test_matching_is_normalized_not_fuzzy(self) -> None:
+        # "The same fact" up to normalization matches; a paraphrase does not
+        # (semantic credit is the LLM judge's job, not the deterministic one).
+        assert fact_f1(["The cat is black!"], ["cat is black"]).f1 == 1.0
+        assert fact_f1(["the cat is dark-colored"], ["cat is black"]).f1 == 0.0
+
+    def test_both_empty_perfect_one_empty_zero(self) -> None:
+        assert fact_f1([], []).f1 == 1.0
+        assert fact_f1(["the", "an"], []).f1 == 1.0  # all noise == no facts
+        assert fact_f1([], ["real fact"]).f1 == 0.0
+        assert fact_f1(["real fact"], []).f1 == 0.0
+
+    def test_order_invariant_seeded_shuffle(self) -> None:
+        # Set semantics: shuffling fact order never changes the score.
+        rng = random.Random(4)
+        predicted = ["a b", "c d", "e f", "g h"]
+        gold = ["c d", "e f", "x y"]
+        baseline = fact_f1(predicted, gold)
+        for _ in range(20):
+            shuffled_pred = rng.sample(predicted, k=len(predicted))
+            shuffled_gold = rng.sample(gold, k=len(gold))
+            assert fact_f1(shuffled_pred, shuffled_gold) == baseline
+
+
+class TestMeanFactF1:
+    def test_macro_average(self) -> None:
+        # Hand-computed: mean of per-question F1 {1.0, 4/7} = (1 + 4/7)/2 = 11/14.
+        perfect = fact_f1(["a"], ["a"])
+        partial = fact_f1(["m one", "m two", "m three"], ["m one", "m two", "g", "h"])
+        assert partial.f1 == 4 / 7
+        assert mean_fact_f1([perfect, partial]) == pytest.approx(11 / 14)
+
+    def test_single_question(self) -> None:
+        only = fact_f1(["a"], ["b"])
+        assert mean_fact_f1([only]) == 0.0
+
+    def test_empty_run_raises(self) -> None:
+        # No questions -> no benchmark score; a silent 0 would fabricate one.
+        with pytest.raises(ValueError, match="at least one"):
+            mean_fact_f1([])
