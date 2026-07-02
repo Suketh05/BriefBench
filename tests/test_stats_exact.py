@@ -16,7 +16,9 @@ import pytest
 
 from membench.stats.exact import (
     ExactBinomialInterval,
+    McNemarExactResult,
     clopper_pearson,
+    mcnemar_exact,
 )
 
 
@@ -185,3 +187,40 @@ class TestClopperPearsonProperties:
             clopper_pearson(4, 8, alpha=0.0)
         with pytest.raises(ValueError, match="alpha"):
             clopper_pearson(4, 8, alpha=1.0)
+
+
+class TestMcNemarExactGolden:
+    """Hand-computed exact McNemar golden on b=2, c=8 discordant pairs.
+
+    Under the null each of the 10 discordant pairs favours either arm with
+    probability 1/2, so min(b, c) = 2 is a Binomial(10, 1/2) tail event:
+
+        p = 2 * sum_{k<=2} C(10, k) / 2^10
+          = 2 * (C(10,0) + C(10,1) + C(10,2)) / 1024
+          = 2 * (1 + 10 + 45) / 1024
+          = 112 / 1024
+          = 0.109375  exactly.
+
+    The denominator is a power of two, so 112/1024 = 7/64 is a dyadic rational
+    representable exactly in float64 -- asserted with ==, no tolerance.
+    """
+
+    def test_exact_two_sided_p(self) -> None:
+        res = mcnemar_exact(2, 8)
+        assert res.p_value == 112 / 1024
+        assert res.p_value == 0.109375  # exact float equality, not approx
+
+    def test_symmetric_in_b_and_c(self) -> None:
+        # Swapping the arms flips the sign of the statistic, not the p-value.
+        forward = mcnemar_exact(2, 8)
+        backward = mcnemar_exact(8, 2)
+        assert forward.p_value == backward.p_value == 0.109375
+        assert forward.mid_p == backward.mid_p
+        assert forward.statistic == -6.0
+        assert backward.statistic == 6.0
+
+    def test_counts_and_method_recorded(self) -> None:
+        res = mcnemar_exact(2, 8)
+        assert isinstance(res, McNemarExactResult)
+        assert (res.b, res.c) == (2, 8)
+        assert res.method == "mcnemar_exact"
