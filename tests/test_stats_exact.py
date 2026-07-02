@@ -113,3 +113,33 @@ class TestPaperWorkedExampleJ:
         typed = clopper_pearson(40, 40, alpha=0.05)
         bm25 = clopper_pearson(28, 40, alpha=0.05)
         assert typed.low > bm25.high
+
+
+class TestBetaQuantileBinomialTailIdentity:
+    r"""The defining property of Clopper--Pearson, checked independently.
+
+    By construction the exact limits invert the binomial tail tests:
+
+        P(X >= s | n, L) = alpha/2   and   P(X <= s | n, U) = alpha/2.
+
+    The module computes L and U through Beta quantiles; here we plug them back
+    into the *binomial* distribution (a different SciPy distribution object and
+    code path), so agreement verifies the Beta-quantile identity
+    ``P(X >= s | p) = I_p(s, n - s + 1)`` numerically rather than assuming it.
+    This is the textbook derivation of the interval (Clopper & Pearson 1934;
+    Brown, Cai & DasGupta 2001, eq. 6).
+    """
+
+    @pytest.mark.parametrize(
+        ("successes", "n"),
+        [(1, 5), (3, 10), (7, 20), (28, 40), (39, 40)],
+    )
+    @pytest.mark.parametrize("alpha", [0.05, 0.10])
+    def test_limits_invert_the_binomial_tails(self, successes: int, n: int, alpha: float) -> None:
+        from scipy import stats
+
+        res = clopper_pearson(successes, n, alpha=alpha)
+        upper_tail_at_low = float(stats.binom.sf(successes - 1, n, res.low))
+        lower_tail_at_high = float(stats.binom.cdf(successes, n, res.high))
+        assert upper_tail_at_low == pytest.approx(alpha / 2.0, abs=1e-10)
+        assert lower_tail_at_high == pytest.approx(alpha / 2.0, abs=1e-10)
