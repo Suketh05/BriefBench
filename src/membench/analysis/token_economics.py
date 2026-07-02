@@ -40,8 +40,10 @@ from enum import Enum
 
 __all__ = [
     "BRIEF_SYSTEM",
+    "Matchup",
     "MatchupOutcome",
     "SessionRecord",
+    "decide_matchup",
 ]
 
 BRIEF_SYSTEM = "brief"
@@ -107,3 +109,58 @@ class MatchupOutcome(Enum):
     BRIEF_WIN = "brief_win"
     BRIEF_LOSS = "brief_loss"
     TIE = "tie"
+
+
+def decide_matchup(brief_tokens: int, competitor_tokens: int) -> MatchupOutcome:
+    """Apply the strict session-cheaper rule to one matchup.
+
+    Brief wins iff ``brief_tokens < competitor_tokens``; loses iff
+    ``brief_tokens > competitor_tokens``; equal spend is a
+    :attr:`MatchupOutcome.TIE`. This is the winner rule of
+    ``tab:tok_context_winrate`` ("the winner is the configuration that spent
+    fewer total session tokens to the same backend model").
+
+    Parameters
+    ----------
+    brief_tokens:
+        Brief session's total token spend (positive).
+    competitor_tokens:
+        Competitor session's total token spend on the same (LLM, task) cell.
+
+    Returns
+    -------
+    MatchupOutcome
+        Which side was strictly cheaper, or a tie on equal spend.
+    """
+    if brief_tokens <= 0 or competitor_tokens <= 0:
+        raise ValueError(
+            "session token counts must be positive, got "
+            f"brief={brief_tokens!r}, competitor={competitor_tokens!r}"
+        )
+    if brief_tokens < competitor_tokens:
+        return MatchupOutcome.BRIEF_WIN
+    if brief_tokens > competitor_tokens:
+        return MatchupOutcome.BRIEF_LOSS
+    return MatchupOutcome.TIE
+
+
+@dataclass(frozen=True, slots=True)
+class Matchup:
+    """One resolved (LLM x task x competitor) cell of the tournament.
+
+    A matchup pairs the Brief session on an (LLM, task) cell against one
+    competitor's session on the same cell (paper ``tab:tok_context_winrate``).
+    The outcome is derived, never stored, so a matchup can never disagree with
+    its own token counts.
+    """
+
+    llm: str
+    task: str
+    competitor: str
+    brief_tokens: int
+    competitor_tokens: int
+
+    @property
+    def outcome(self) -> MatchupOutcome:
+        """Strict session-cheaper outcome of this cell (see :func:`decide_matchup`)."""
+        return decide_matchup(self.brief_tokens, self.competitor_tokens)
