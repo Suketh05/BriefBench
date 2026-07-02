@@ -6,16 +6,20 @@ import dataclasses
 
 import pytest
 
+from membench.agents.llm.base import LLMClient, LLMResponse
 from membench.metrics.compliance import score_compliance, score_compliance_for_task
 from membench.metrics.judge import (
     PROMPT_ORDERS,
+    RUBRIC_SYSTEM_PROMPT,
     ComplianceJudge,
     JudgeCase,
     JudgeConfig,
     JudgeVerdict,
     LLMComplianceJudge,
     StubComplianceJudge,
+    build_judge_prompt,
     judge_task,
+    parse_judge_verdict,
 )
 from membench.types import MemoryItem, Scorer, SpecVariant, Task
 
@@ -256,3 +260,165 @@ class TestJudgeTask:
             ruled = score_compliance_for_task(response, task)
             assert judged.rate == ruled.rate
             assert judged.compliant_ids == ruled.honored_ids
+
+
+class _FakeJudgeClient(LLMClient):
+    """Offline LLMClient double returning a canned judge reply; records prompts."""
+
+    def __init__(self, reply: str, model: str = "fake-judge-model") -> None:
+        self.reply = reply
+        self._model = model
+        self.calls: list[tuple[str, str, int]] = []
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    def complete(self, system: str, user: str, max_tokens: int = 1024) -> LLMResponse:
+        self.calls.append((system, user, max_tokens))
+        return LLMResponse(
+            text=self.reply,
+            input_tokens=(len(system) + len(user)) // 4,
+            output_tokens=max(1, len(self.reply) // 4),
+            dollars=0.0,
+            model=self._model,
+        )
+
+
+class TestBuildJudgePrompt:
+    def test_system_prompt_is_the_fixed_rubric(self) -> None:
+        system, _ = build_judge_prompt(_case(AUDIT, "answer"), JudgeConfig())
+        assert system == RUBRIC_SYSTEM_PROMPT
+        # The rubric encodes the two protocol requirements verbatim-checkable
+        # against sec:grader / sec:gradervalidity.
+        assert "HONOURS the invariant" in system
+        assert "restating" in system.lower()
+        assert "not told which memory" in system
+
+    def test_invariant_first_order(self) -> None:
+        case = _case(AUDIT, "the produced answer text")
+        _, user = build_judge_prompt(case, JudgeConfig(prompt_order="invariant_first"))
+        assert user.index("TASK:") == 0
+        assert user.index("GOVERNING DECISION") < user.index("AGENT ANSWER:")
+        assert AUDIT in user
+        assert "the produced answer text" in user
+
+    def test_answer_first_order_swaps_blocks(self) -> None:
+        # sec:gradervalidity names swapped presentation order as a stability
+        # probe; the swap must be a config knob, not a caller reformat.
+        case = _case(AUDIT, "the produced answer text")
+        _, user = build_judge_prompt(case, JudgeConfig(prompt_order="answer_first"))
+        assert user.index("TASK:") == 0
+        assert user.index("AGENT ANSWER:") < user.index("GOVERNING DECISION")
+
+    def test_decision_id_shown_only_when_present(self) -> None:
+        with_id = build_judge_prompt(_case(AUDIT, "a", "D-1"), JudgeConfig())[1]
+        without_id = build_judge_prompt(_case(AUDIT, "a", None), JudgeConfig())[1]
+        assert "(id D-1)" in with_id
+        assert "(id" not in without_id
+
+    def test_prompt_carries_no_arm_identity(self) -> None:
+        # The prompt is a pure render of the arm-blind JudgeCase: every line is
+        # either fixed scaffolding or one of the case's own fields.
+        case = _case(AUDIT, "answer body", "D-1")
+        _, user = build_judge_prompt(case, JudgeConfig())
+        scaffolding = {"TASK:", "GOVERNING DECISION (id D-1):", "AGENT ANSWER:", ""}
+        payload = {case.task_query, case.invariant_text, case.answer_text}
+        assert set(user.split("\n")) == scaffolding | payload
+
+
+class TestParseJudgeVerdict:
+    CONFIG = JudgeConfig(model="fake-judge-model", version="llm-judge-v1")
+
+    def test_compliant_verdict_with_rationale(self) -> None:
+        verdict = parse_judge_verdict(
+            "VERDICT: COMPLIANT\nRATIONALE: the export is wrapped in withAuditLog().",
+            self.CONFIG,
+        )
+        assert verdict.compliant is True
+        assert verdict.parse_ok is True
+        assert verdict.rationale == "the export is wrapped in withAuditLog()."
+        assert verdict.config == self.CONFIG
+
+    def test_noncompliant_verdict(self) -> None:
+        verdict = parse_judge_verdict("VERDICT: NONCOMPLIANT\nRATIONALE: never applied.", self.CONFIG)
+        assert verdict.compliant is False
+        assert verdict.parse_ok is True
+
+    def test_tolerates_case_and_hyphen_variants(self) -> None:
+        assert parse_judge_verdict("verdict: compliant", self.CONFIG).compliant is True
+        assert parse_judge_verdict("Verdict: Non-Compliant", self.CONFIG).compliant is False
+        assert parse_judge_verdict("VERDICT: NON COMPLIANT", self.CONFIG).compliant is False
+
+    def test_rationale_falls_back_to_full_text(self) -> None:
+        verdict = parse_judge_verdict("VERDICT: COMPLIANT because it is applied", self.CONFIG)
+        assert verdict.compliant is True
+        assert "because it is applied" in verdict.rationale
+
+    def test_unparseable_output_fails_closed(self) -> None:
+        # A garbage grade must never be promoted to a success (it would inflate
+        # the compliance numerator of eq:factor) -- but it stays flagged.
+        verdict = parse_judge_verdict("I think this looks fine overall!", self.CONFIG)
+        assert verdict.compliant is False
+        assert verdict.parse_ok is False
+        assert "unparseable" in verdict.rationale
+
+    def test_empty_output_fails_closed(self) -> None:
+        verdict = parse_judge_verdict("", self.CONFIG)
+        assert verdict.compliant is False
+        assert verdict.parse_ok is False
+
+
+class TestLLMComplianceJudge:
+    def test_judges_via_injected_client(self) -> None:
+        client = _FakeJudgeClient("VERDICT: COMPLIANT\nRATIONALE: invariant enforced.")
+        judge = LLMComplianceJudge(client)
+        verdict = judge.judge(_case(AUDIT, "wraps the export in withAuditLog()"))
+        assert verdict.compliant is True
+        assert verdict.rationale == "invariant enforced."
+        assert verdict.config.model == "fake-judge-model"
+
+    def test_client_receives_rubric_and_arm_blind_prompt(self) -> None:
+        client = _FakeJudgeClient("VERDICT: NONCOMPLIANT\nRATIONALE: not applied.")
+        judge = LLMComplianceJudge(client, max_tokens=128)
+        case = _case(AUDIT, "just stream the rows")
+        judge.judge(case)
+        (system, user, max_tokens), = client.calls
+        assert system == RUBRIC_SYSTEM_PROMPT
+        assert max_tokens == 128
+        assert (system, user) == (RUBRIC_SYSTEM_PROMPT, build_judge_prompt(case, judge.config)[1])
+
+    def test_prompt_order_knob_reaches_the_prompt(self) -> None:
+        client = _FakeJudgeClient("VERDICT: COMPLIANT")
+        judge = LLMComplianceJudge(client, prompt_order="answer_first")
+        judge.judge(_case(AUDIT, "answer body"))
+        _, user, _ = client.calls[0]
+        assert user.index("AGENT ANSWER:") < user.index("GOVERNING DECISION")
+        assert judge.config.prompt_order == "answer_first"
+
+    def test_config_records_snapshot_identity(self) -> None:
+        judge = LLMComplianceJudge(_FakeJudgeClient("VERDICT: COMPLIANT", model="judge-snap-01"))
+        assert judge.config.model == "judge-snap-01"
+        assert judge.config.version == "llm-judge-v1"
+        assert judge.config.temperature == 0.0
+
+    def test_instantiation_without_client_is_offline_safe(self) -> None:
+        # Lazy construction: no SDK import, no keys needed until .judge() runs.
+        judge = LLMComplianceJudge(model_key="claude")
+        assert judge.config.model == "claude"
+        assert isinstance(judge, ComplianceJudge)
+
+    def test_works_end_to_end_with_judge_task(self) -> None:
+        client = _FakeJudgeClient("VERDICT: COMPLIANT\nRATIONALE: fine.")
+        result = judge_task(LLMComplianceJudge(client), "any response", _task(("D-1", "D-2")))
+        assert result.rate == 1.0  # canned judge approves both units
+        assert len(client.calls) == 2
+
+    @pytest.mark.live
+    def test_live_judge_smoke(self) -> None:
+        # Requires network + ANTHROPIC_API_KEY; the offline suite never runs it.
+        judge = LLMComplianceJudge(model_key="claude")
+        verdict = judge.judge(
+            _case(AUDIT, "I wrapped the export in withAuditLog() before streaming.")
+        )
+        assert verdict.parse_ok is True
