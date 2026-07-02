@@ -46,12 +46,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from membench.metrics.compliance import decision_keywords
+
 __all__ = [
     "PROMPT_ORDERS",
     "ComplianceJudge",
     "JudgeCase",
     "JudgeConfig",
     "JudgeVerdict",
+    "StubComplianceJudge",
 ]
 
 #: Presentation orders for the reference invariant vs. the agent answer inside the
@@ -200,3 +203,112 @@ class ComplianceJudge(ABC):
     def judge(self, case: JudgeCase) -> JudgeVerdict:
         """Grade one (task, governing decision, answer) unit into a verdict."""
         raise NotImplementedError
+
+
+# Two semantically identical phrasings per rubric outcome. The active phrasing is
+# selected by the stub judge's seed, so reruns with different seeds are a built-in
+# rubric-paraphrase probe: Section ``sec:gradervalidity`` demands "verdict stability
+# under rubric paraphrase", and for the stub that stability holds by construction
+# (the seed can only change the rationale wording, never the boolean verdict).
+_RATIONALE_TEMPLATES: dict[str, tuple[str, str]] = {
+    "honored": (
+        "invariant identifier {target!r} is applied in the answer",
+        "the answer enforces the invariant via {target!r}",
+    ),
+    "bare_id": (
+        "decision id {target!r} is referenced (invariant names no code identifier)",
+        "no code identifier in the invariant; the answer cites decision id {target!r}",
+    ),
+    "missing": (
+        "no invariant identifier ({target}) appears in the answer",
+        "the answer never applies any invariant identifier ({target})",
+    ),
+    "no_reference": (
+        "decision id {target!r} is never referenced (invariant names no code identifier)",
+        "no code identifier in the invariant and the answer omits decision id {target!r}",
+    ),
+}
+
+
+class StubComplianceJudge(ComplianceJudge):
+    """Deterministic offline rubric judge -- the default grader for the pipeline.
+
+    Implements the rubric half of the paper's "LLM-or-rubric-assisted judge"
+    (Section ``sec:grader``): it "checks the decision's invariant on the output",
+    using the same concrete-identifier surface as the rule-based scorer
+    (:func:`membench.metrics.compliance.decision_keywords`: function calls,
+    PascalCase/camelCase symbols, scoped packages), with the bare decision id as
+    the last-resort target when the invariant names no identifier. The rubric is
+    a pure function of the case text, so verdicts are exactly reproducible
+    offline -- no API, no sampling -- and boolean, matching the near-deterministic
+    bimodal grading the paper reports (Section ``sec:gradervalidity``,
+    Figure ``fig:ecdf_compliance``).
+
+    Parameters
+    ----------
+    seed
+        Selects which of the equivalent rationale phrasings is emitted (a
+        deterministic rubric-paraphrase knob, see :data:`_RATIONALE_TEMPLATES`).
+        The verdict boolean is independent of the seed by construction.
+    prompt_order
+        Recorded in :attr:`config` for parity with live judges; the stub reads
+        the structured :class:`JudgeCase` directly, so order cannot affect it.
+    """
+
+    def __init__(self, seed: int = 0, *, prompt_order: str = "invariant_first") -> None:
+        self._seed = seed
+        self._config = JudgeConfig(
+            model="stub-rubric-judge",
+            version="rubric-v1",
+            prompt_order=prompt_order,
+            temperature=0.0,
+            max_tokens=256,
+        )
+
+    @property
+    def config(self) -> JudgeConfig:
+        """The stub's recorded identity (model label, rubric version, order)."""
+        return self._config
+
+    def _phrase(self, outcome: str, target: str) -> str:
+        templates = _RATIONALE_TEMPLATES[outcome]
+        return templates[self._seed % len(templates)].format(target=target)
+
+    def judge(self, case: JudgeCase) -> JudgeVerdict:
+        """Apply the invariant rubric to the answer; deterministic and seeded.
+
+        Rubric steps (in order):
+
+        1. Extract the invariant's concrete identifiers via
+           :func:`membench.metrics.compliance.decision_keywords`.
+        2. If any identifier occurs in the answer, the invariant is honoured.
+        3. If the invariant names no identifier, fall back to the bare decision
+           id (when provided), mirroring the rule-based scorer's last resort.
+        4. Otherwise the invariant is not honoured.
+        """
+        keywords = decision_keywords(case.invariant_text)
+        if keywords:
+            for keyword in sorted(keywords):
+                if keyword in case.answer_text:
+                    return JudgeVerdict(
+                        compliant=True,
+                        rationale=self._phrase("honored", keyword),
+                        config=self._config,
+                    )
+            targets = ", ".join(sorted(keywords))
+            return JudgeVerdict(
+                compliant=False,
+                rationale=self._phrase("missing", targets),
+                config=self._config,
+            )
+        if case.decision_id is not None and case.decision_id in case.answer_text:
+            return JudgeVerdict(
+                compliant=True,
+                rationale=self._phrase("bare_id", case.decision_id),
+                config=self._config,
+            )
+        return JudgeVerdict(
+            compliant=False,
+            rationale=self._phrase("no_reference", case.decision_id or "<none>"),
+            config=self._config,
+        )
